@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 DB_PATH = "knowledge_base.db"
 SIMILARITY_THRESHOLD = 0.68
-MAX_RESULTS = 10
+MAX_RESULTS = 15
 MAX_CONTEXT_CHUNKS = 4
 load_dotenv()
 API_KEY = os.getenv("API_KEY")
