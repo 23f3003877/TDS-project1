@@ -44,6 +44,7 @@ def create_connection():
     conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
         logger.info(f"Connected to SQLite database at {DB_PATH}")
         return conn
     except sqlite3.Error as e:
@@ -65,6 +66,7 @@ def create_tables(conn):
             post_number INTEGER,
             author TEXT,
             created_at TEXT,
+            reply_to_post_number INTEGER,
             likes INTEGER,
             chunk_index INTEGER,
             content TEXT,
@@ -85,6 +87,13 @@ def create_tables(conn):
             embedding BLOB
         )
         ''')
+        
+        # Add reply_to_post_number column if it doesn't exist
+        try:
+            cursor.execute("ALTER TABLE discourse_chunks ADD COLUMN reply_to_post_number INTEGER DEFAULT 0")
+            logger.info("Added reply_to_post_number column to discourse_chunks table")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
         
         conn.commit()
         logger.info("Database tables created successfully")
@@ -251,6 +260,11 @@ def process_discourse_files(conn):
                     post_number = post.get('post_number')
                     author = post.get('username', '')
                     created_at = post.get('created_at', '')
+                    
+                    # Extract and handle reply_to_post_number
+                    reply_to = post.get('reply_to_post_number')
+                    reply_to_post_number = reply_to if reply_to is not None else 0
+                    
                     likes = post.get('like_count', 0)
                     html_content = post.get('cooked', '')
                     
@@ -271,9 +285,22 @@ def process_discourse_files(conn):
                     for i, chunk in enumerate(chunks):
                         cursor.execute('''
                         INSERT INTO discourse_chunks 
-                        (post_id, topic_id, topic_title, post_number, author, created_at, likes, chunk_index, content, url, embedding)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ''', (post_id, topic_id, topic_title, post_number, author, created_at, likes, i, chunk, url, None))
+                        (post_id, topic_id, topic_title, post_number, author, created_at, reply_to_post_number, likes, chunk_index, content, url, embedding)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ''', (
+                            post_id, 
+                            topic_id, 
+                            topic_title, 
+                            post_number, 
+                            author, 
+                            created_at, 
+                            reply_to_post_number,  # New field added
+                            likes, 
+                            i, 
+                            chunk, 
+                            url, 
+                            None
+                        ))
                         total_chunks += 1
             
             conn.commit()
@@ -442,7 +469,7 @@ async def create_embeddings(api_key):
                                 # First, get the original chunk data to duplicate
                                 cursor.execute("""
                                 SELECT post_id, topic_id, topic_title, post_number, author, created_at, 
-                                       likes, chunk_index, content, url FROM discourse_chunks 
+                                       reply_to_post_number, likes, chunk_index, content, url FROM discourse_chunks 
                                 WHERE id = ?
                                 """, (record_id,))
                                 original = cursor.fetchone()
@@ -452,8 +479,8 @@ async def create_embeddings(api_key):
                                     cursor.execute("""
                                     INSERT INTO discourse_chunks 
                                     (post_id, topic_id, topic_title, post_number, author, created_at, 
-                                     likes, chunk_index, content, url, embedding)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     reply_to_post_number, likes, chunk_index, content, url, embedding)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                     """, (
                                         original["post_id"], 
                                         original["topic_id"], 
@@ -461,6 +488,7 @@ async def create_embeddings(api_key):
                                         original["post_number"],
                                         original["author"], 
                                         original["created_at"], 
+                                        original["reply_to_post_number"], 
                                         original["likes"], 
                                         f"{original['chunk_index']}_{part_id}",  # Append part_id to chunk_index
                                         text, 
